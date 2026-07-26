@@ -228,17 +228,89 @@ impl StreamingRedactor {
     }
 }
 
+const SERVER_STDERR_LINE_LIMIT: usize = 8 * 1024;
+
+struct ServerStderrState {
+    redactor: StreamingRedactor,
+    pending_line: Vec<u8>,
+}
+
+impl ServerStderrState {
+    fn new(secrets: &SecretSet) -> Self {
+        Self {
+            redactor: StreamingRedactor::from_secret_set(secrets),
+            pending_line: Vec::new(),
+        }
+    }
+
+    fn push(&mut self, bytes: &[u8]) -> Vec<Vec<u8>> {
+        self.pending_line.extend(self.redactor.push(bytes));
+        self.drain_lines(false)
+    }
+
+    fn flush(&mut self) -> Vec<Vec<u8>> {
+        self.pending_line.extend(self.redactor.flush());
+        self.drain_lines(true)
+    }
+
+    fn drain_lines(&mut self, flush: bool) -> Vec<Vec<u8>> {
+        let mut lines = Vec::new();
+        let mut consumed = 0;
+        for (index, byte) in self.pending_line.iter().enumerate() {
+            if *byte == b'\n' {
+                let mut line = self.pending_line[consumed..index].to_vec();
+                if line.last() == Some(&b'\r') {
+                    line.pop();
+                }
+                lines.push(line);
+                consumed = index + 1;
+            }
+        }
+        if consumed != 0 {
+            self.pending_line.drain(..consumed);
+        }
+
+        while self.pending_line.len() > SERVER_STDERR_LINE_LIMIT {
+            let end = bounded_server_stderr_chunk_end(&self.pending_line);
+            lines.push(self.pending_line.drain(..end).collect());
+        }
+
+        if flush && !self.pending_line.is_empty() {
+            let mut line = std::mem::take(&mut self.pending_line);
+            if line.last() == Some(&b'\r') {
+                line.pop();
+            }
+            lines.push(line);
+        }
+        lines
+    }
+}
+
+fn bounded_server_stderr_chunk_end(bytes: &[u8]) -> usize {
+    debug_assert!(bytes.len() > SERVER_STDERR_LINE_LIMIT);
+    let mut end = SERVER_STDERR_LINE_LIMIT;
+    while end > 0 && bytes[end] & 0b1100_0000 == 0b1000_0000 {
+        end -= 1;
+    }
+    if end == 0 {
+        SERVER_STDERR_LINE_LIMIT
+    } else {
+        end
+    }
+}
+
 /// A stderr-oriented diagnostic sink with an injectable writer.
 ///
 /// The writer is the sink's only output capability, which structurally keeps
 /// diagnostics away from business stdout. Every event is redacted before it is
-/// written. Server stderr uses one `StreamingRedactor` per server.
+/// written. Server stderr uses one streaming redactor and bounded logical-line
+/// buffer per server so formatting is independent of transport read chunks.
 pub struct WriterDiagnosticSink<W: Write + Send> {
     writer: Mutex<W>,
     debug_enabled: bool,
     style: StylePolicy,
     secrets: Mutex<SecretSet>,
-    server_redactors: Mutex<BTreeMap<String, StreamingRedactor>>,
+    server_redactors: Mutex<BTreeMap<String, ServerStderrState>>,
 }
 
 impl<W: Write + Send> WriterDiagnosticSink<W> {
@@ -328,8 +400,8 @@ impl<W: Write + Send> WriterDiagnosticSink<W> {
         self.emit_prefixed(&prefix, &redacted);
     }
 
-    fn emit_server_bytes(&self, server: &str, bytes: &[u8]) {
-        if bytes.is_empty() {
+    fn emit_server_lines(&self, server: &str, lines: Vec<Vec<u8>>) {
+        if lines.is_empty() {
             return;
         }
         let redacted_server = self
@@ -340,8 +412,16 @@ impl<W: Write + Send> WriterDiagnosticSink<W> {
         let safe_server = sanitize_server_name(&redacted_server);
         let marker = style_fragment("[server]", ANSI_MAGENTA, self.style);
         let prefix = format!("{marker} {safe_server}: ");
-        let text = String::from_utf8_lossy(bytes);
-        self.emit_prefixed(&prefix, &text);
+        let mut writer = self
+            .writer
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        for line in lines {
+            let text = String::from_utf8_lossy(&line);
+            let _ = writer.write_all(prefix.as_bytes());
+            let _ = writer.write_all(text.as_bytes());
+            let _ = writer.write_all(b"\n");
+        }
     }
 
     fn emit_prefixed(&self, prefix: &str, text: &str) {
@@ -382,7 +462,7 @@ impl<W: Write + Send> DiagnosticSink for WriterDiagnosticSink<W> {
     }
 
     fn server_stderr(&self, server: &str, bytes: &[u8]) {
-        let safe = {
+        let lines = {
             let mut redactors = self
                 .server_redactors
                 .lock()
@@ -394,25 +474,25 @@ impl<W: Write + Send> DiagnosticSink for WriterDiagnosticSink<W> {
                         .secrets
                         .lock()
                         .unwrap_or_else(|poisoned| poisoned.into_inner());
-                    StreamingRedactor::from_secret_set(&secrets)
+                    ServerStderrState::new(&secrets)
                 })
                 .push(bytes)
         };
-        self.emit_server_bytes(server, &safe);
+        self.emit_server_lines(server, lines);
     }
 
     fn server_stderr_flush(&self, server: &str) {
-        let safe = {
+        let lines = {
             let mut redactors = self
                 .server_redactors
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             redactors
                 .remove(server)
-                .map(|mut redactor| redactor.flush())
+                .map(|mut state| state.flush())
                 .unwrap_or_default()
         };
-        self.emit_server_bytes(server, &safe);
+        self.emit_server_lines(server, lines);
     }
 }
 
