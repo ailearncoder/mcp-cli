@@ -520,10 +520,11 @@ mod tests {
         let malicious_name = "../server/name\nsecret";
         let id = server_id(malicious_name);
         let paths = DaemonPaths::from_runtime_parent(temp.path(), &id).expect("secure paths");
+        let canonical_temp = fs::canonicalize(temp.path()).expect("canonical tempdir");
 
         assert_eq!(
             paths.runtime_dir,
-            temp.path().join(format!("mcp-cli-{}", current_uid()))
+            canonical_temp.join(format!("mcp-cli-{}", current_uid()))
         );
         assert_eq!(
             fs::symlink_metadata(&paths.runtime_dir)
