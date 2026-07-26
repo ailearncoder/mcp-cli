@@ -392,7 +392,11 @@ async fn wait_for_peer_close(
     let mut byte = [0_u8; 1];
     tokio::select! {
         _ = shutdown.changed() => Ok(()),
-        result = stream.read(&mut byte) => result.map(|_| ()),
+        result = stream.read(&mut byte) => match result {
+            Ok(_) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::ConnectionReset => Ok(()),
+            Err(error) => Err(error),
+        },
     }
 }
 
