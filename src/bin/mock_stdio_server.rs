@@ -325,10 +325,21 @@ fn write_error(
 }
 
 fn write_frame(writer: &mut impl Write, value: &Value) -> Result<(), String> {
-    serde_json::to_writer(&mut *writer, value)
+    const WRITE_CHUNK_SIZE: usize = 1024;
+
+    let mut frame = serde_json::to_vec(value)
         .map_err(|error| format!("failed to serialize response: {error}"))?;
+    frame.push(b'\n');
+
+    // Keep each synchronous fixture write small. In particular, this avoids
+    // submitting a single schema string larger than a Windows anonymous-pipe
+    // buffer while preserving the full NDJSON frame seen by the client.
+    for chunk in frame.chunks(WRITE_CHUNK_SIZE) {
+        writer
+            .write_all(chunk)
+            .map_err(|error| format!("failed to write response: {error}"))?;
+    }
     writer
-        .write_all(b"\n")
-        .and_then(|_| writer.flush())
+        .flush()
         .map_err(|error| format!("failed to write response: {error}"))
 }
