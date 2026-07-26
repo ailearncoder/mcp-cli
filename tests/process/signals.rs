@@ -90,7 +90,13 @@ struct SignalFixture {
 
 impl SignalFixture {
     fn new(name: &str) -> Self {
-        let root = tempfile::tempdir().expect("isolated signal fixture");
+        // Keep the full hashed socket path within sockaddr_un::sun_path even
+        // when the ambient TMPDIR is long (for example, in CI).
+        let root = tempfile::Builder::new()
+            .prefix("m")
+            .rand_bytes(2)
+            .tempdir_in("/tmp")
+            .expect("isolated signal fixture");
         let config = root.path().join("mcp_servers.json");
         let script = root.path().join("mock-script.json");
         let observation = root.path().join("mock-observation.json");

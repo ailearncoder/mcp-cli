@@ -313,6 +313,7 @@ fn run_cli(
     stdin: Option<&[u8]>,
     environment: &[(&str, &str)],
 ) -> Output {
+    let system_root = std::env::var_os("SystemRoot");
     let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_mcp-cli"));
     command
         .current_dir(root)
@@ -331,6 +332,11 @@ fn run_cli(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if let Some(system_root) = system_root {
+        // Windows networking depends on SystemRoot for Winsock provider
+        // discovery. Preserve only this required host variable after env_clear.
+        command.env("SystemRoot", system_root);
+    }
     match mode {
         Mode::Direct => {
             command.env("MCP_NO_DAEMON", "1");

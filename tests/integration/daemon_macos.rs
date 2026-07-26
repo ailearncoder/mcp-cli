@@ -85,7 +85,13 @@ struct MacFixture {
 
 impl MacFixture {
     fn new(specs: impl IntoIterator<Item = ServerSpec>) -> Self {
-        let root = tempfile::tempdir().expect("isolated macOS daemon root");
+        // Keep the full hashed socket path within macOS sockaddr_un::sun_path
+        // even when the ambient TMPDIR is long (for example, in CI).
+        let root = tempfile::Builder::new()
+            .prefix("m")
+            .rand_bytes(2)
+            .tempdir_in("/tmp")
+            .expect("isolated macOS daemon root");
         let config = root.path().join("mcp_servers.json");
         let mut fixture = Self {
             root,

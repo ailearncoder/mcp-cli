@@ -76,7 +76,13 @@ async fn response_line(reader: &mut BufReader<UnixStream>) -> Value {
 
 #[tokio::test]
 async fn current_executable_worker_uses_stdin_and_publishes_ready_atomically() {
-    let root = tempfile::tempdir().expect("isolated runtime");
+    // Keep the full hashed socket path within sockaddr_un::sun_path even when
+    // the ambient TMPDIR is long (for example, in CI).
+    let root = tempfile::Builder::new()
+        .prefix("m")
+        .rand_bytes(2)
+        .tempdir_in("/tmp")
+        .expect("isolated runtime");
     let observation = root.path().join("observation.json");
     let script = root.path().join("script.json");
     fs::write(

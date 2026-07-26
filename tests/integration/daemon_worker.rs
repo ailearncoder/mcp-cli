@@ -62,7 +62,13 @@ struct Fixture {
 
 impl Fixture {
     fn new(name: &str, list_delay_ms: u64) -> Self {
-        let root = tempfile::tempdir().expect("isolated daemon fixture");
+        // Keep the full hashed socket path within sockaddr_un::sun_path even
+        // when the ambient TMPDIR is long (for example, in CI).
+        let root = tempfile::Builder::new()
+            .prefix("m")
+            .rand_bytes(2)
+            .tempdir_in("/tmp")
+            .expect("isolated daemon fixture");
         let runtime_parent = root.path();
         let observation = root.path().join("backend-observation.json");
         let script = root.path().join("backend-script.json");
