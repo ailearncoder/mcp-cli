@@ -31,24 +31,27 @@ fn environment() -> impl Strategy<Value = BTreeMap<String, String>> {
     prop::collection::btree_map(environment_key(), environment_value(), 0..25)
 }
 
+fn environment_keys_match(left: &str, right: &str) -> bool {
+    if cfg!(windows) {
+        left.eq_ignore_ascii_case(right)
+    } else {
+        left == right
+    }
+}
+
 fn reference_merge(
     parent: &BTreeMap<String, String>,
     configured: &BTreeMap<String, String>,
 ) -> BTreeMap<String, String> {
     parent
-        .keys()
-        .chain(configured.keys())
-        .cloned()
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .map(|key| {
-            let value = configured
-                .get(&key)
-                .or_else(|| parent.get(&key))
-                .expect("each union key is present in at least one input")
-                .clone();
-            (key, value)
+        .iter()
+        .filter(|(parent_key, _)| {
+            !configured
+                .keys()
+                .any(|configured_key| environment_keys_match(configured_key, parent_key))
         })
+        .chain(configured.iter())
+        .map(|(key, value)| (key.clone(), value.clone()))
         .collect()
 }
 
@@ -68,21 +71,24 @@ proptest! {
         let original_parent = parent.clone();
         let original_configured = configured.clone();
         let expected = reference_merge(&parent, &configured);
-        let expected_keys = parent
-            .keys()
-            .chain(configured.keys())
-            .cloned()
-            .collect::<BTreeSet<_>>();
+        let expected_keys = expected.keys().cloned().collect::<BTreeSet<_>>();
 
         let merged = merge_stdio_environment(&parent, &configured);
         let repeated = merge_stdio_environment(&parent, &configured);
         let actual_keys = merged.keys().cloned().collect::<BTreeSet<_>>();
 
-        prop_assert_eq!(&actual_keys, &expected_keys, "result keys must be exactly the input union");
+        prop_assert_eq!(
+            &actual_keys,
+            &expected_keys,
+            "result keys must match the platform-aware input union",
+        );
         prop_assert_eq!(&merged, &expected, "result must match the independent right-biased oracle");
 
         for (key, parent_value) in &parent {
-            if !configured.contains_key(key) {
+            if !configured
+                .keys()
+                .any(|configured_key| environment_keys_match(configured_key, key))
+            {
                 prop_assert_eq!(
                     merged.get(key),
                     Some(parent_value),

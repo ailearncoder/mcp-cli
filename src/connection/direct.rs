@@ -32,7 +32,9 @@ const DIRECT_CLEANUP_GRACE: Duration = Duration::from_secs(8);
 /// Builds the complete environment for a stdio server process.
 ///
 /// `configured` is applied after `parent`, so server configuration wins when
-/// both maps contain the same key. The function performs no process reads or
+/// both maps contain the same key. On Windows, environment names are
+/// case-insensitive, so differently-cased parent collisions are removed before
+/// configured values are applied. The function performs no process reads or
 /// shell expansion; callers must capture the parent environment explicitly at
 /// the process-launch boundary. Returning a [`BTreeMap`] gives process startup
 /// one deterministic, independently testable environment source.
@@ -41,6 +43,12 @@ pub fn merge_stdio_environment(
     configured: &BTreeMap<String, String>,
 ) -> BTreeMap<String, String> {
     let mut merged = parent.clone();
+    #[cfg(windows)]
+    merged.retain(|parent_key, _| {
+        !configured
+            .keys()
+            .any(|configured_key| configured_key.eq_ignore_ascii_case(parent_key))
+    });
     merged.extend(
         configured
             .iter()
