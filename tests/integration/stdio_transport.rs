@@ -257,7 +257,13 @@ async fn real_stdio_transport_preserves_launch_protocol_results_and_diagnostics(
     let pid = observation["pid"].as_u64().unwrap();
     assert_process_reaped(pid).await;
 
-    assert_eq!(observation["cwd"], cwd.to_string_lossy().as_ref());
+    let observed_cwd = observation["cwd"]
+        .as_str()
+        .expect("fixture cwd should be a string");
+    assert_eq!(
+        std::fs::canonicalize(observed_cwd).expect("canonical observed cwd"),
+        std::fs::canonicalize(&cwd).expect("canonical configured cwd")
+    );
     assert_eq!(observation["env"]["PATH"], "configured-path-wins");
     assert_eq!(observation["env"]["FIXTURE_ONLY"], SECRET);
     assert_eq!(
