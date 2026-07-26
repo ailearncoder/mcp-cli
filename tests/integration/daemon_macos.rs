@@ -85,8 +85,9 @@ struct MacFixture {
 
 impl MacFixture {
     fn new(specs: impl IntoIterator<Item = ServerSpec>) -> Self {
-        // Keep the full hashed socket path within macOS sockaddr_un::sun_path
-        // even when the ambient TMPDIR is long (for example, in CI).
+        // Keep this lifecycle fixture in a short isolated root so it exercises
+        // the full ServerId socket layout. Production macOS paths compact the
+        // socket stem only when the complete path would exceed `sun_path`.
         let root = tempfile::Builder::new()
             .prefix("m")
             .rand_bytes(2)

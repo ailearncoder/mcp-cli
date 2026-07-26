@@ -7,6 +7,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[cfg(target_os = "macos")]
+use std::os::unix::ffi::OsStrExt;
+
 use thiserror::Error;
 
 use crate::config::{SHA256_HEX_LENGTH, ServerId};
@@ -17,6 +20,8 @@ const PID_SUFFIX: &str = ".pid";
 const LOCK_SUFFIX: &str = ".lock";
 const PRIVATE_DIRECTORY_MODE: u32 = 0o700;
 const PRIVATE_FILE_MODE: u32 = 0o600;
+#[cfg(target_os = "macos")]
+const MACOS_SUN_PATH_CAPACITY: usize = 104;
 
 /// Filesystem type expected when validating or removing a daemon artifact.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -91,8 +96,10 @@ pub struct DaemonPaths {
 }
 
 impl DaemonPaths {
-    /// Creates or securely reuses `${TMPDIR:-/tmp}/mcp-cli-<uid>/` and derives
-    /// artifact names solely from a complete lowercase hexadecimal ServerId.
+    /// Creates or securely reuses `${TMPDIR:-/tmp}/mcp-cli-<uid>/`. PID and
+    /// lock names use the complete lowercase hexadecimal ServerId. Linux keeps
+    /// that complete ID for sockets; macOS compacts the socket ID to a 128-bit
+    /// base64url token only when the full path would not fit in `sun_path`.
     pub fn new(server_id: &ServerId) -> Result<Self, DaemonPathError> {
         let temporary_root = env::var_os("TMPDIR")
             .filter(|value| !value.is_empty())
@@ -135,7 +142,10 @@ impl DaemonPaths {
         let metadata = validate_runtime_dir(&runtime_dir, uid, None)?;
 
         let basename = &server_id.0;
-        let socket = runtime_dir.join(format!("{basename}{SOCKET_SUFFIX}"));
+        let socket = runtime_dir.join(format!(
+            "{}{SOCKET_SUFFIX}",
+            socket_stem(&runtime_dir, basename)
+        ));
         let pid = runtime_dir.join(format!("{basename}{PID_SUFFIX}"));
         let lock = runtime_dir.join(format!("{basename}{LOCK_SUFFIX}"));
         let paths = Self {
@@ -248,7 +258,13 @@ impl DaemonPaths {
                 "artifact parent is outside the runtime directory",
             ));
         }
-        let expected_name = format!("{}{suffix}", self.server_id_from_path()?);
+        let server_id = self.server_id_from_path()?;
+        let expected_stem = if suffix == SOCKET_SUFFIX {
+            socket_stem(&self.runtime_dir, server_id)
+        } else {
+            server_id.to_owned()
+        };
+        let expected_name = format!("{expected_stem}{suffix}");
         if path.file_name().and_then(|name| name.to_str()) != Some(expected_name.as_str()) {
             return Err(DaemonPathError::unsafe_path(
                 path,
@@ -364,6 +380,65 @@ fn validate_server_id(server_id: &ServerId) -> Result<(), DaemonPathError> {
             PathBuf::from(&server_id.0),
             "server identifier must be a full lowercase SHA-256 digest",
         ))
+    }
+}
+
+fn socket_stem(runtime_dir: &Path, server_id: &str) -> String {
+    #[cfg(target_os = "macos")]
+    {
+        let full_path = runtime_dir.join(format!("{server_id}{SOCKET_SUFFIX}"));
+        if full_path.as_os_str().as_bytes().len() >= MACOS_SUN_PATH_CAPACITY {
+            return compact_socket_token(server_id);
+        }
+    }
+    let _ = runtime_dir;
+    server_id.to_owned()
+}
+
+/// Encodes the first 128 bits of a validated SHA-256 ServerId as unpadded
+/// base64url. Twenty-two path-safe bytes retain the security strength required
+/// for local daemon identity while leaving room in macOS `sun_path`.
+#[cfg(target_os = "macos")]
+fn compact_socket_token(server_id: &str) -> String {
+    const TOKEN_BYTES: usize = 16;
+    const BASE64URL: &[u8; 64] =
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+    let encoded = server_id.as_bytes();
+    let mut digest = [0_u8; TOKEN_BYTES];
+    for (index, byte) in digest.iter_mut().enumerate() {
+        let high = decode_lower_hex(encoded[index * 2]);
+        let low = decode_lower_hex(encoded[index * 2 + 1]);
+        *byte = (high << 4) | low;
+    }
+
+    let mut token = String::with_capacity(22);
+    for chunk in digest.chunks(3) {
+        let first = chunk[0];
+        let second = chunk.get(1).copied().unwrap_or_default();
+        let third = chunk.get(2).copied().unwrap_or_default();
+        token.push(char::from(BASE64URL[usize::from(first >> 2)]));
+        token.push(char::from(
+            BASE64URL[usize::from(((first & 0x03) << 4) | (second >> 4))],
+        ));
+        if chunk.len() > 1 {
+            token.push(char::from(
+                BASE64URL[usize::from(((second & 0x0f) << 2) | (third >> 6))],
+            ));
+        }
+        if chunk.len() > 2 {
+            token.push(char::from(BASE64URL[usize::from(third & 0x3f)]));
+        }
+    }
+    token
+}
+
+#[cfg(target_os = "macos")]
+fn decode_lower_hex(byte: u8) -> u8 {
+    match byte {
+        b'0'..=b'9' => byte - b'0',
+        b'a'..=b'f' => byte - b'a' + 10,
+        _ => unreachable!("ServerId was validated before socket token encoding"),
     }
 }
 
@@ -519,6 +594,17 @@ mod tests {
         let temp = TempDir::new().expect("tempdir");
         let malicious_name = "../server/name\nsecret";
         let id = server_id(malicious_name);
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(
+                compact_socket_token(&"0".repeat(SHA256_HEX_LENGTH)),
+                "AAAAAAAAAAAAAAAAAAAAAA"
+            );
+            assert_eq!(
+                compact_socket_token(&"f".repeat(SHA256_HEX_LENGTH)),
+                "_____________________w"
+            );
+        }
         let paths = DaemonPaths::from_runtime_parent(temp.path(), &id).expect("secure paths");
         let canonical_temp = fs::canonicalize(temp.path()).expect("canonical tempdir");
 
@@ -533,14 +619,18 @@ mod tests {
                 & 0o7777,
             0o700
         );
-        for (path, suffix) in [
-            (&paths.socket, SOCKET_SUFFIX),
-            (&paths.pid, PID_SUFFIX),
-            (&paths.lock, LOCK_SUFFIX),
+        for (path, suffix, expected_stem) in [
+            (
+                &paths.socket,
+                SOCKET_SUFFIX,
+                socket_stem(&paths.runtime_dir, &id.0),
+            ),
+            (&paths.pid, PID_SUFFIX, id.0.clone()),
+            (&paths.lock, LOCK_SUFFIX, id.0.clone()),
         ] {
             assert_eq!(path.parent(), Some(paths.runtime_dir.as_path()));
             let basename = path.file_name().unwrap().to_str().unwrap();
-            assert_eq!(basename, format!("{}{suffix}", id.0));
+            assert_eq!(basename, format!("{expected_stem}{suffix}"));
             assert!(!basename.contains('/'));
             assert!(!basename.contains(".."));
             assert!(!basename.contains(malicious_name));

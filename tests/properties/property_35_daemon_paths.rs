@@ -210,9 +210,17 @@ proptest! {
             let stem = basename
                 .strip_suffix(suffix)
                 .expect("artifact has independently expected suffix");
-            prop_assert!(is_lowercase_sha256_hex(stem));
-            prop_assert_eq!(basename.len(), SHA256_HEX_LENGTH + suffix.len());
-            prop_assert_eq!(stem, id.0.as_str());
+            if cfg!(target_os = "macos") && suffix == ".sock" && stem != id.0.as_str() {
+                prop_assert_eq!(stem.len(), 22);
+                let is_path_safe = stem.bytes().all(|byte| {
+                    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')
+                });
+                prop_assert!(is_path_safe);
+            } else {
+                prop_assert!(is_lowercase_sha256_hex(stem));
+                prop_assert_eq!(basename.len(), SHA256_HEX_LENGTH + suffix.len());
+                prop_assert_eq!(stem, id.0.as_str());
+            }
             prop_assert!(!basename.contains('/'));
             prop_assert!(!basename.contains('\\'));
             prop_assert!(!basename.contains(".."));
@@ -229,7 +237,17 @@ proptest! {
         }
 
         prop_assert_eq!(basenames.len(), 3, "socket/PID/lock paths must differ");
-        prop_assert_eq!(stems, BTreeSet::from([id.0.clone()]));
+        let socket_stem = paths
+            .socket
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .expect("ASCII socket stem");
+        if cfg!(target_os = "macos") && socket_stem != id.0.as_str() {
+            prop_assert_eq!(stems.len(), 2, "long macOS socket path must be compact");
+        } else {
+            prop_assert_eq!(stems.len(), 1, "artifact stems must share ServerId");
+        }
+        prop_assert!(stems.contains(&id.0));
 
         // Forged identifiers are checked in a second pristine root so rejection
         // must happen before even a runtime directory or escape artifact exists.

@@ -136,7 +136,7 @@ Unix 平台后台 worker：
 
 - 由当前可执行文件自启动，例如隐藏入口 `mcp-cli --daemon <server> <encoded-config>`；优先通过受限临时文件或 stdin 传递配置，避免密钥出现在进程参数列表。
 - 为一个服务器持有一个 `rmcp` 连接。
-- 监听用户私有目录中的 Unix socket。
+- 监听用户私有目录中的 Unix socket；macOS 仅在完整 socket 路径超出 `sun_path` 时使用 ServerId 前 128 bit 的紧凑 base64url token；Linux socket、短路径 macOS socket 和所有 PID/lock 文件仍使用完整 ServerId。
 - 接收换行分隔 JSON 请求，返回同样带 request ID 的 JSON 响应。
 - 每次有效请求重置空闲计时器。
 - 退出时关闭 MCP 连接，并删除 socket/PID 文件。

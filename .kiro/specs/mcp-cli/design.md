@@ -342,7 +342,7 @@ pub fn config_hash(config: &ServerConfig) -> ConfigHash; // 32-byte SHA-256
 pub fn server_id(server_name: &str) -> ServerId;         // SHA-256 hex
 ```
 
-canonical JSON 递归排序所有对象键，保留数组顺序和 JSON 标量类型；序列化后重新解析必须语义等价。`ConfigHash` 对“完成环境替换且已验证”的单服务器配置计算，PID 只持有 hex hash，不持有配置或 secret。文件名只使用固定长度 lowercase hex `ServerId`，服务器名永不参与路径拼接。
+canonical JSON 递归排序所有对象键，保留数组顺序和 JSON 标量类型；序列化后重新解析必须语义等价。`ConfigHash` 对“完成环境替换且已验证”的单服务器配置计算，PID 只持有 hex hash，不持有配置或 secret。PID、lock 和可容纳完整路径的 socket 文件名使用固定长度 lowercase hex `ServerId`；macOS socket 仅在完整路径超过 `sun_path` 时改用 ServerId 前 128 bit 的 base64url token。服务器名永不参与路径拼接。
 
 ### 5. ToolFilter 与 SearchMatcher
 
@@ -464,7 +464,7 @@ pub trait ProcessInspector {
 }
 ```
 
-Runtime directory 为 `${TMPDIR:-/tmp}/mcp-cli-<uid>/`，创建后校验 owner、非 symlink、mode `0700`。PID 临时文件使用 `create_new + 0600 + write + sync + rename`；最终文件再次以 `symlink_metadata` 校验。socket/PID/lock 的所有删除都要求父目录、owner、file type 和 basename 与预期一致。Linux 通过 `/proc`，macOS 通过系统进程查询 API 校验 UID、启动时间与 executable；无法验证时拒绝发送信号。
+Runtime directory 为 `${TMPDIR:-/tmp}/mcp-cli-<uid>/`，创建后校验 owner、非 symlink、mode `0700`。为适配 macOS 较短的 `sockaddr_un::sun_path`，macOS 仅在完整 socket 路径无法容纳时使用 ServerId 前 128 bit 的无填充 base64url token；Linux socket、短路径 macOS socket、PID 与 lock basename 仍使用完整 SHA-256 ServerId。PID 临时文件使用 `create_new + 0600 + write + sync + rename`；最终文件再次以 `symlink_metadata` 校验。socket/PID/lock 的所有删除都要求父目录、owner、file type 和 basename 与预期一致。Linux 通过 `/proc`，macOS 通过系统进程查询 API 校验 UID、启动时间与 executable；无法验证时拒绝发送信号。
 
 ### 10. NDJSON Codec 与 IPC
 
