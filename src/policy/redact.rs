@@ -297,10 +297,13 @@ impl<W: Write + Send> WriterDiagnosticSink<W> {
     /// stable kind, exit classification, and retained non-rendered source.
     pub fn redact_error(&self, mut error: crate::error::CliError) -> crate::error::CliError {
         error.message = self.redact_text(&error.message);
-        error.details = error
-            .details
-            .take()
-            .map(|details| self.redact_text(&details));
+        if !error.details_are_redacted() {
+            error.details = error
+                .details
+                .take()
+                .map(|details| self.redact_text(&details));
+            error.set_details_redacted();
+        }
         error.suggestion = error
             .suggestion
             .take()
@@ -372,6 +375,10 @@ impl<W: Write + Send> DiagnosticSink for WriterDiagnosticSink<W> {
         if self.debug_enabled {
             self.emit_text("[mcp-cli] debug:", ANSI_MAGENTA, &format!(" {message}"));
         }
+    }
+
+    fn redact_text(&self, text: &str) -> String {
+        WriterDiagnosticSink::redact_text(self, text)
     }
 
     fn server_stderr(&self, server: &str, bytes: &[u8]) {
@@ -580,6 +587,15 @@ mod tests {
         sink.debug("debug token-value");
         let enabled = String::from_utf8(sink.into_inner()).expect("diagnostics are UTF-8");
         assert_eq!(enabled, "[mcp-cli] debug: debug [REDACTED]\n");
+
+        let mut marker_secret = SecretSet::new();
+        marker_secret.insert("R");
+        let sink = WriterDiagnosticSink::new(Vec::<u8>::new(), false, marker_secret);
+        let error = crate::error::CliError::network_error("remote", "unused")
+            .with_details("[REDACTED]")
+            .mark_details_redacted();
+        let error = sink.redact_error(error);
+        assert_eq!(error.details.as_deref(), Some("[REDACTED]"));
     }
 
     #[test]

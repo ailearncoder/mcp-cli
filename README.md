@@ -316,6 +316,8 @@ Error [ERROR_KIND]: Message
   Suggestion: Recovery action
 ```
 
+当 MCP 工具结果包含 `isError=true` 时，`TOOL_EXECUTION_FAILED` 的 stderr 详情会先合并 ToolResult 中的 text 错误并规范化为单行，再执行脱敏和 1024 字符限制，随后复用调用前已取得的 input schema。schema 的字符串键和值会在 JSON 转义和大小判断前脱敏，最终序列化结果还会执行一次安全一致性检查；紧凑结果不超过 8 KiB 时完整显示，更大的 schema 改为显示按名称排序的前 20 个顶层参数类型、required 状态和省略数量。若 schema 字段名因脱敏改变或冲突，或最终串仍需改写，则显示安全的不可内联说明，避免把可能丢字段或无效的结果误称为完整 schema。降级场景会建议运行 `mcp-cli info SERVER TOOL`；CLI 不会为诊断再次请求服务器，也不会回显调用参数。
+
 退出码：
 
 | 退出码 | 含义 |

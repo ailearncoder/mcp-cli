@@ -183,6 +183,7 @@ pub struct CliError {
     pub suggestion: Option<String>,
     pub exit_code: ExitCode,
     class: ErrorClass,
+    details_redacted: bool,
     source: Option<Arc<dyn Error + Send + Sync>>,
 }
 
@@ -202,13 +203,32 @@ impl CliError {
             suggestion: None,
             exit_code: kind.exit_code(),
             class: kind.error_class(),
+            details_redacted: false,
             source: None,
         }
     }
 
     pub fn with_details(mut self, details: impl Into<String>) -> Self {
         self.details = Some(details.into());
+        self.details_redacted = false;
         self
+    }
+
+    /// Marks details that were redacted before a lossy transformation. The
+    /// process boundary must not redact this field again because replacement
+    /// markers are not guaranteed to be stable under a second pass for every
+    /// possible configured secret.
+    pub(crate) fn mark_details_redacted(mut self) -> Self {
+        self.details_redacted = true;
+        self
+    }
+
+    pub(crate) const fn details_are_redacted(&self) -> bool {
+        self.details_redacted
+    }
+
+    pub(crate) fn set_details_redacted(&mut self) {
+        self.details_redacted = true;
     }
 
     pub fn with_suggestion(mut self, suggestion: impl Into<String>) -> Self {

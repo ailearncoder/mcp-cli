@@ -527,7 +527,7 @@ pub enum CommandOutcome {
 - **List**：有界并发获取每个 server 的 tools/instructions；过滤后按工具名排序。失败服务器产生可读 `<error: ...>` 项并继续。批处理单服务器失败不是顶层 Structured_Error。
 - **Info**：先验证 server 存在，只连接该 server。server 视图显示 transport、instructions、过滤后工具及参数；tool 视图在过滤后的工具中查找并输出完整 schema JSON。
 - **Grep**：预编译 SearchMatcher，有界并发获取过滤后 tools；失败服务器写 warning 并继续；结果按 server/tool 排序。零结果输出提示并成功退出。
-- **Call**：在连接前完成输入大小、JSON object 与 ToolFilter 校验，只连接目标 server。内联 JSON 优先；无内联且 stdin 非 TTY 时流式读取至 EOF；TTY 或空白输入为 `{}`。读取使用 `take(16 MiB + 1)`，检测超限后不再连接。每个 retry attempt 只发送一次 call；`isError=true` 或明确业务错误映射退出码 2。
+- **Call**：在连接前完成输入大小、JSON object 与 ToolFilter 校验，只连接目标 server。内联 JSON 优先；无内联且 stdin 非 TTY 时流式读取至 EOF；TTY 或空白输入为 `{}`。读取使用 `take(16 MiB + 1)`，检测超限后不再连接。每个 retry attempt 只发送一次 call；`isError=true` 或明确业务错误映射退出码 2。`isError=true` 的 Structured_Error 优先提取 Tool_Result 中的全部 text content，以实际单空格分隔符合并并执行单行规范化，再通过统一 Redactor，最后施加 1024 字符限制；随后复用调用前 `list_tools` 已取得的目标 Tool_Schema，并在 JSON 转义和大小判断前递归脱敏字符串键和值，同时对最终序列化结果执行安全一致性检查。紧凑 schema 不超过 8 KiB 时完整展示，超过时按名称输出前 20 个顶层参数的类型与 required 状态及省略数量，并建议通过 `info` 查看完整 schema；若 schema key 因脱敏发生改变或冲突，或最终序列化串仍需脱敏改写，则改为安全的不可内联说明，不能将可能丢字段或无效的结果标记为完整 schema。预脱敏的 Details 在 CliError 中标记，顶层防御性脱敏不会对该字段重复替换；整个诊断不发起额外 MCP 请求。
 
 ### 13. Presenter、DiagnosticSink 与 Redactor
 
@@ -540,6 +540,7 @@ pub trait DiagnosticSink: Send + Sync {
     fn warning(&self, message: &str);
     fn debug(&self, message: &str);
     fn server_stderr(&self, server: &str, bytes: &[u8]);
+    fn redact_text(&self, text: &str) -> String;
 }
 
 pub struct StylePolicy { pub is_tty: bool, pub no_color: bool }

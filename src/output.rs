@@ -318,6 +318,13 @@ pub trait DiagnosticSink: Send + Sync {
     fn debug(&self, message: &str);
     fn server_stderr(&self, server: &str, bytes: &[u8]);
 
+    /// Redacts registered secrets before callers perform lossy transformations
+    /// such as truncation or JSON escaping. Sinks without secret state retain
+    /// the input for compatibility; production sinks override this method.
+    fn redact_text(&self, text: &str) -> String {
+        text.to_owned()
+    }
+
     /// Flushes bytes retained to detect secrets spanning server stderr chunks.
     /// Existing sinks need no special behavior, preserving trait compatibility.
     fn server_stderr_flush(&self, _server: &str) {}
@@ -503,6 +510,10 @@ impl<Out: Write + Send, Err: Write + Send> DiagnosticSink for DualStreamWriter<O
 
     fn debug(&self, message: &str) {
         self.diagnostics.debug(message);
+    }
+
+    fn redact_text(&self, text: &str) -> String {
+        self.diagnostics.redact_text(text)
     }
 
     fn server_stderr(&self, server: &str, bytes: &[u8]) {
@@ -890,6 +901,7 @@ mod tests {
         let streams =
             DualStreamWriter::new(Vec::new(), Vec::new(), false, true, false, false, secrets);
 
+        assert_eq!(streams.redact_text("credential"), "[REDACTED]");
         streams
             .write_outcome(&JsonPresenter, CommandOutcome::Json(json!({"ok": true})))
             .unwrap();

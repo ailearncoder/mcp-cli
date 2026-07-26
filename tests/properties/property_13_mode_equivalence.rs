@@ -534,10 +534,11 @@ fn oracle(case: Case, fixture: &Fixture) -> Observation {
             stderr: structured_error(
                 "TOOL_EXECUTION_FAILED",
                 &format!("Tool \"{alpha}\" execution failed on server \"target\""),
-                Some("The MCP tool result reported isError=true"),
                 Some(&format!(
-                    "Run 'mcp-cli info target {alpha}' and verify the arguments match the input schema"
+                    "Server message: business failure\n  Input schema: {}",
+                    fixture.schema()
                 )),
+                Some("Retry with a JSON object matching the input schema shown above"),
             ),
             exit_code: 2,
         },

@@ -394,7 +394,7 @@ fn call_validation_unknown_and_disabled_targets_do_not_start_or_call_servers() {
 fn business_error_uses_exit_two_and_never_writes_result_json_to_stdout() {
     let mut spec = ServerSpec::new("target", vec![tool("echo", "echo arguments")]);
     spec.call_result = json!({
-        "content": [{"type": "text", "text": "failed"}],
+        "content": [{"type": "text", "text": "failed\nwith details"}],
         "isError": true,
         "structuredContent": {"reason": "business"}
     });
@@ -403,7 +403,21 @@ fn business_error_uses_exit_two_and_never_writes_result_json_to_stdout() {
     let output = fixture.run(&["call", "target", "echo", "{}"], None);
 
     assert_error(&output, 2, "TOOL_EXECUTION_FAILED");
-    assert!(!String::from_utf8_lossy(&output.stderr).contains("structuredContent"));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("  Details: Server message: failed with details"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("structuredContent"));
+    let expected_schema = tool("echo", "echo arguments")["inputSchema"].to_string();
+    assert!(
+        stderr.contains(&format!("  Input schema: {expected_schema}")),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("Retry with a JSON object matching the input schema shown above"),
+        "{stderr}"
+    );
     assert_eq!(
         fixture.observation("target")["calls"]
             .as_array()
@@ -411,6 +425,46 @@ fn business_error_uses_exit_two_and_never_writes_result_json_to_stdout() {
             .len(),
         1
     );
+    fixture.assert_closed("target");
+
+    let mut large_tool = tool("echo", "echo arguments");
+    large_tool["inputSchema"] = json!({
+        "type": "object",
+        "properties": {
+            "value": {
+                "type": "integer",
+                "description": "x".repeat(9 * 1024)
+            }
+        },
+        "required": ["value"]
+    });
+    let mut spec = ServerSpec::new("target", vec![large_tool]);
+    spec.call_result = json!({
+        "content": [{"type": "text", "text": "large schema failure"}],
+        "isError": true
+    });
+    let fixture = StdioFixture::new(vec![spec]);
+
+    let output = fixture.run(&["call", "target", "echo", "{}"], None);
+
+    assert_error(&output, 2, "TOOL_EXECUTION_FAILED");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("  Details: Server message: large schema failure"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("  Input summary: value (integer, required)"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("  Input schema: omitted ("), "{stderr}");
+    assert!(
+        stderr.contains(
+            "Run 'mcp-cli info target echo' and verify the arguments match the input schema"
+        ),
+        "{stderr}"
+    );
+    assert!(!stderr.contains(&"x".repeat(128)), "{stderr}");
     fixture.assert_closed("target");
 }
 

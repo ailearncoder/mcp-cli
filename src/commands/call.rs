@@ -130,29 +130,34 @@ impl CallHandler {
             }
         };
 
-        if !tools.iter().any(|tool| tool.name == tool_name) {
-            let candidates = filter.filter(tools);
-            let primary = CliError::tool_not_found(
-                server_name,
-                tool_name,
-                candidates.iter().map(|tool| tool.name.as_str()),
-            );
-            close_without_masking(
-                ctx,
-                connection,
-                "connection close failed after call tool lookup",
-            )
-            .await;
-            return Err(primary);
-        }
+        let input_schema = match tools.iter().find(|tool| tool.name == tool_name) {
+            Some(tool) => tool.input_schema.clone(),
+            None => {
+                let candidates = filter.filter(tools);
+                let primary = CliError::tool_not_found(
+                    server_name,
+                    tool_name,
+                    candidates.iter().map(|tool| tool.name.as_str()),
+                );
+                close_without_masking(
+                    ctx,
+                    connection,
+                    "connection close failed after call tool lookup",
+                )
+                .await;
+                return Err(primary);
+            }
+        };
 
         // One handler invocation means one call into McpConnection. The direct
         // wrapper may retry transient failures, once per RetryExecutor attempt.
         let outcome = match connection.call_tool(ctx, tool_name, arguments).await {
-            Ok(result) if tool_result_is_error(&result) => Err(CliError::tool_execution_failed(
+            Ok(result) if tool_result_is_error(&result) => Err(tool_result_error(
+                ctx,
                 server_name,
                 tool_name,
-                "The MCP tool result reported isError=true",
+                &result,
+                &input_schema,
             )),
             Ok(result) => Ok(CommandOutcome::Json(result)),
             Err(error) => Err(connection_error(
@@ -292,6 +297,269 @@ fn tool_result_is_error(result: &ToolResult) -> bool {
         == Some(true)
 }
 
+fn tool_result_error(
+    ctx: &CommandContext,
+    server_name: &str,
+    tool_name: &str,
+    result: &ToolResult,
+    input_schema: &Value,
+) -> CliError {
+    let mut details = tool_result_error_text(result, ctx.diagnostics.as_ref()).map_or_else(
+        || "The MCP tool result reported isError=true".to_owned(),
+        |message| format!("Server message: {message}"),
+    );
+    let schema = tool_schema_diagnostic(input_schema, ctx.diagnostics.as_ref());
+    details.push_str("\n  ");
+    details.push_str(&schema.details);
+
+    let error =
+        CliError::tool_execution_failed(server_name, tool_name, &details).mark_details_redacted();
+    if schema.complete {
+        error.with_suggestion("Retry with a JSON object matching the input schema shown above")
+    } else {
+        error
+    }
+}
+
+fn tool_result_error_text(
+    result: &ToolResult,
+    diagnostics: &dyn crate::output::DiagnosticSink,
+) -> Option<String> {
+    const MAX_CHARS: usize = 1024;
+
+    let text_blocks = result
+        .as_object()
+        .and_then(|object| object.get("content"))
+        .and_then(Value::as_array)?
+        .iter()
+        .filter_map(|content| {
+            let content = content.as_object()?;
+            (content.get("type").and_then(Value::as_str) == Some("text"))
+                .then(|| content.get("text").and_then(Value::as_str))
+                .flatten()
+        })
+        .collect::<Vec<_>>();
+    if text_blocks.is_empty() {
+        return None;
+    }
+    let normalized = bounded_single_line([text_blocks.join(" ")], usize::MAX)?;
+    let redacted = diagnostics.redact_text(&normalized);
+    bounded_single_line([redacted], MAX_CHARS)
+}
+
+struct ToolSchemaDiagnostic {
+    details: String,
+    complete: bool,
+}
+
+fn tool_schema_diagnostic(
+    input_schema: &Value,
+    diagnostics: &dyn crate::output::DiagnosticSink,
+) -> ToolSchemaDiagnostic {
+    const MAX_INLINE_BYTES: usize = 8 * 1024;
+
+    // Redact the structured value before JSON escaping or size-based omission;
+    // otherwise an escaped or partially truncated secret could evade the
+    // process boundary's final defense-in-depth redaction pass.
+    let redacted = redact_json_value(input_schema, diagnostics);
+    if redacted.key_changed {
+        return ToolSchemaDiagnostic {
+            details:
+                "Input summary: schema contains redacted field names; inline schema unavailable"
+                    .to_owned(),
+            complete: false,
+        };
+    }
+
+    let input_schema = redacted.value;
+    let compact = input_schema.to_string();
+    if diagnostics.redact_text(&compact) != compact {
+        return ToolSchemaDiagnostic {
+            details: "Input summary: schema could not be safely inlined after final redaction"
+                .to_owned(),
+            complete: false,
+        };
+    }
+    if compact.len() <= MAX_INLINE_BYTES {
+        return ToolSchemaDiagnostic {
+            details: format!("Input schema: {compact}"),
+            complete: true,
+        };
+    }
+
+    let summary = diagnostics.redact_text(&summarize_input_schema(&input_schema));
+    ToolSchemaDiagnostic {
+        details: format!(
+            "Input summary: {summary}\n  Input schema: omitted ({} bytes; inline limit is {MAX_INLINE_BYTES} bytes)",
+            compact.len()
+        ),
+        complete: false,
+    }
+}
+
+struct RedactedJsonValue {
+    value: Value,
+    key_changed: bool,
+}
+
+fn redact_json_value(
+    value: &Value,
+    diagnostics: &dyn crate::output::DiagnosticSink,
+) -> RedactedJsonValue {
+    match value {
+        Value::String(text) => RedactedJsonValue {
+            value: Value::String(diagnostics.redact_text(text)),
+            key_changed: false,
+        },
+        Value::Array(values) => {
+            let mut key_changed = false;
+            let values = values
+                .iter()
+                .map(|value| {
+                    let redacted = redact_json_value(value, diagnostics);
+                    key_changed |= redacted.key_changed;
+                    redacted.value
+                })
+                .collect();
+            RedactedJsonValue {
+                value: Value::Array(values),
+                key_changed,
+            }
+        }
+        Value::Object(object) => {
+            let mut key_changed = false;
+            let mut values = serde_json::Map::new();
+            for (key, value) in object {
+                let redacted_key = diagnostics.redact_text(key);
+                key_changed |= redacted_key != key.as_str();
+                let redacted = redact_json_value(value, diagnostics);
+                key_changed |= redacted.key_changed;
+                key_changed |= values.insert(redacted_key, redacted.value).is_some();
+            }
+            RedactedJsonValue {
+                value: Value::Object(values),
+                key_changed,
+            }
+        }
+        scalar => RedactedJsonValue {
+            value: scalar.clone(),
+            key_changed: false,
+        },
+    }
+}
+
+fn summarize_input_schema(input_schema: &Value) -> String {
+    const MAX_PARAMETERS: usize = 20;
+
+    let Some(properties) = input_schema.get("properties").and_then(Value::as_object) else {
+        return format!(
+            "top-level type: {}; no top-level properties advertised",
+            schema_type(input_schema)
+        );
+    };
+    if properties.is_empty() {
+        return "no top-level parameters".to_owned();
+    }
+
+    let required = input_schema.get("required").and_then(Value::as_array);
+    let mut parameters = properties.iter().collect::<Vec<_>>();
+    parameters.sort_by_key(|(name, _)| *name);
+    let omitted = parameters.len().saturating_sub(MAX_PARAMETERS);
+    let mut summary = parameters
+        .into_iter()
+        .take(MAX_PARAMETERS)
+        .map(|(name, schema)| {
+            let necessity = if required.is_some_and(|required| {
+                required
+                    .iter()
+                    .any(|candidate| candidate.as_str() == Some(name.as_str()))
+            }) {
+                "required"
+            } else {
+                "optional"
+            };
+            let name =
+                bounded_single_line([name.as_str()], 80).unwrap_or_else(|| "(unnamed)".to_owned());
+            format!("{name} ({}, {necessity})", schema_type(schema))
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    if omitted != 0 {
+        summary.push_str(&format!(", (+{omitted} more)"));
+    }
+    summary
+}
+
+fn schema_type(schema: &Value) -> String {
+    match schema.get("type") {
+        Some(Value::String(kind)) => {
+            bounded_single_line([kind.as_str()], 80).unwrap_or_else(|| "any".to_owned())
+        }
+        Some(Value::Array(kinds)) => {
+            let mut kinds = kinds
+                .iter()
+                .filter_map(Value::as_str)
+                .filter_map(|kind| bounded_single_line([kind], 80))
+                .collect::<Vec<_>>();
+            kinds.sort();
+            kinds.dedup();
+            if kinds.is_empty() {
+                "any".to_owned()
+            } else {
+                kinds.join("|")
+            }
+        }
+        _ => "any".to_owned(),
+    }
+}
+
+fn bounded_single_line<I, S>(parts: I, max_chars: usize) -> Option<String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let mut output = String::new();
+    let mut count = 0;
+    let mut pending_space = false;
+    let mut truncated = false;
+
+    'parts: for part in parts {
+        let part = part.as_ref();
+        if !output.is_empty() {
+            pending_space = true;
+        }
+        for character in part.chars() {
+            if character.is_whitespace() || character.is_control() {
+                pending_space |= !output.is_empty();
+                continue;
+            }
+            if pending_space {
+                if count == max_chars {
+                    truncated = true;
+                    break 'parts;
+                }
+                output.push(' ');
+                count += 1;
+                pending_space = false;
+            }
+            if count == max_chars {
+                truncated = true;
+                break 'parts;
+            }
+            output.push(character);
+            count += 1;
+        }
+    }
+
+    if output.is_empty() {
+        return None;
+    }
+    if truncated {
+        output.push_str("...[truncated]");
+    }
+    Some(output)
+}
+
 fn connection_error(
     server: &ServerDefinition,
     tool_name: Option<&str>,
@@ -386,6 +654,12 @@ mod handler_tests {
             self.debug.lock().expect("debug lock").push(message.into());
         }
 
+        fn redact_text(&self, text: &str) -> String {
+            text.replace("top-secret-token", "[REDACTED]")
+                .replace("split secret", "[REDACTED]")
+                .replace("left\",\"right", "[REDACTED]")
+        }
+
         fn server_stderr(&self, _server: &str, bytes: &[u8]) {
             self.server_stderr
                 .lock()
@@ -421,7 +695,10 @@ mod handler_tests {
         ToolInfo {
             name: name.into(),
             description: None,
-            input_schema: json!({"type": "object"}),
+            input_schema: json!({
+                "type": "object",
+                "description": "schema top-secret-token\nvalue"
+            }),
         }
     }
 
@@ -735,7 +1012,16 @@ mod handler_tests {
     async fn business_and_typed_transport_failures_map_without_extra_calls() {
         let scenarios = vec![
             (
-                Ok(json!({"content": [{"type": "text", "text": "failed"}], "isError": true})),
+                Ok(json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": format!("{}split\n", "x".repeat(1018))
+                        },
+                        {"type": "text", "text": "secret"}
+                    ],
+                    "isError": true
+                })),
                 ErrorKind::ToolExecutionFailed,
                 ExitCode::Tool,
             ),
@@ -782,8 +1068,38 @@ mod handler_tests {
             assert_eq!(error.exit_code, expected_exit);
             assert_eq!(manager.trace.called.load(Ordering::SeqCst), 1);
             assert_eq!(manager.trace.closed.load(Ordering::SeqCst), 1);
-            assert!(!format!("{error:?}").contains("secret"));
+            let visible = format!("{error:?}");
+            assert!(!visible.contains("secret"));
+            assert!(
+                !visible.contains("top-se") && !visible.contains("split"),
+                "a secret prefix crossed the text truncation boundary: {visible}"
+            );
         }
+
+        let diagnostics = RecordingDiagnostics::default();
+        let schema = tool_schema_diagnostic(
+            &json!({
+                "properties": {
+                    "top-secret-token": {"type": "string"},
+                    "[REDACTED]": {"type": "number"}
+                }
+            }),
+            &diagnostics,
+        );
+        assert!(!schema.complete);
+        assert_eq!(
+            schema.details,
+            "Input summary: schema contains redacted field names; inline schema unavailable"
+        );
+        assert!(!schema.details.contains("top-secret-token"));
+
+        let schema = tool_schema_diagnostic(&json!({"enum": ["left", "right"]}), &diagnostics);
+        assert!(!schema.complete);
+        assert_eq!(
+            schema.details,
+            "Input summary: schema could not be safely inlined after final redaction"
+        );
+        assert!(!schema.details.contains("left\",\"right"));
     }
 
     #[tokio::test]

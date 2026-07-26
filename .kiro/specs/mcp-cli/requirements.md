@@ -230,6 +230,8 @@
 10. WHEN stdout 中的 Tool_Result JSON 被解析后重新序列化并再次解析, THE MCP_CLI SHALL 保持 Tool_Result 的 Semantic_Equivalence。
 11. IF MCP_Tool 返回明确的业务执行错误, THEN THE MCP_CLI SHALL 返回退出码 2 且不把 Structured_Error 写入 stdout。
 12. WHEN call 产生警告、debug 或传输诊断, THE MCP_CLI SHALL 仅将 Diagnostic_Output 写入 stderr。
+13. WHEN MCP_Tool 返回 `isError=true` 且 Tool_Result 包含非空 text content, THE MCP_CLI SHALL 先以单空格合并全部 text content 并将换行与控制字符归一为单行，再通过 Redactor 处理该最终文本，最后将可见文本限制为 1024 个字符并在 `TOOL_EXECUTION_FAILED` 的 stderr 详情中优先展示；若不存在可用 text content，则显示稳定的 `isError=true` 说明。
+14. WHEN MCP_Tool 返回 `isError=true`, THE MCP_CLI SHALL 复用调用前已获得的 Tool_Schema，并在 JSON 转义或大小判断前通过 Redactor 递归处理 schema 的字符串键和值：紧凑序列化不超过 8 KiB 时在 stderr 详情中完整展示，超过 8 KiB 时展示按名称排序的前 20 个顶层参数类型与 required 状态、省略数量和完整 schema 的 `info` 建议；若 schema 键因脱敏改变或冲突，或最终序列化结果仍会触发 Redactor，则不得把可能丢字段或被改写的结果称为完整 schema，而应显示安全的不可内联说明与 `info` 建议；该诊断不得额外请求 MCP_Server。
 
 ### 需求 12：结构化错误、退出码与恢复建议
 
