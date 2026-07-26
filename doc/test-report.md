@@ -347,7 +347,54 @@ export NO_COLOR=1
 [mcp-cli] debug: selected daemon mode
 ```
 
-连续命令均应成功，第二条命令应复用 worker。等待超过空闲超时后检查：
+连续命令均应成功，第二条命令应复用 worker。
+
+### 9.3 daemon 请求 deadline 回归
+
+已确认并修复过一个 daemon 生命周期缺陷：worker 启动成功后，第二次命令可能输出：
+
+```text
+mcphub
+  <error: Failed to communicate with server "mcphub">
+```
+
+该问题只影响 daemon 路径；相同配置使用 `MCP_NO_DAEMON=1` 时能够正常列出工具，而且失败时 `mcp-cli __daemon` 进程仍然存活。
+
+根因是 worker bootstrap 创建的 `CommandContext` 带有最多 5 秒的启动 deadline。这个 deadline 本应只限制后端初始化、socket 发布和 ready 握手，却被继续传给长期运行的 `listTools`、`callTool` 等请求。daemon 存活超过 5 秒后，后续请求继承了已经过期的 deadline，因此立即失败；worker 的 accept/idle 循环没有退出，所以进程仍可被观察到。
+
+修复位于 `src/daemon/worker.rs` 的 `execute_request`：
+
+- bootstrap deadline 仍只约束 daemon 启动，不改变 5 秒快速失败语义；
+- 每个 IPC 操作开始时创建新的请求级 `CommandContext`；
+- 请求 deadline 使用与客户端一致的 `DAEMON_IPC_CAP`，即单次请求最多 5 秒；
+- diagnostics 与 cancellation 边界继续复用，不改变脱敏、取消和连接清理行为；
+- daemon 总存活时间仍由 `MCP_DAEMON_TIMEOUT` 控制，不能把 5 秒请求上限解释为 daemon 生命周期。
+
+使用单服务器配置进行回归。等待时间必须超过 5 秒 startup cap，同时小于本节设置的 10 秒 idle timeout。第一次命令启动或连接 worker 后再采集 PID：
+
+```bash
+"$BIN" -c "$HTTP_CONFIG"
+pid_before="$(pgrep -f '[m]cp-cli __daemon' | sort)"
+sleep 6
+"$BIN" -c "$HTTP_CONFIG"
+pid_after="$(pgrep -f '[m]cp-cli __daemon' | sort)"
+test "$pid_before" = "$pid_after"
+```
+
+通过标准：两次命令都成功，第二次输出中没有 `Failed to communicate with server`，且 PID 集合不变。这同时证明请求复用了原 worker，而不是重启 daemon 或回退 direct。
+
+本次修复已通过：
+
+```bash
+cargo fmt --check
+cargo test --all-features --test daemon_worker
+cargo test --all-features --test daemon_linux
+cargo clippy --all-targets --all-features -- -D warnings
+```
+
+其中 `daemon_worker` 和 `daemon_linux` 均为 4/4 通过；真实 debug 二进制在等待 6 秒后第二次 list 成功，daemon PID 保持不变。
+
+完成回归后，等待超过空闲超时再检查：
 
 ```bash
 sleep 12

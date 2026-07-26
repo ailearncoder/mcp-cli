@@ -999,15 +999,24 @@ fn parse_request_frame(frame: &[u8]) -> Result<IpcRequest, RequestError> {
 
 async fn execute_request(
     shared: &SharedConnection,
-    context: &CommandContext,
+    startup_context: &CommandContext,
     request: IpcRequest,
 ) -> (IpcResponse, bool) {
+    // The bootstrap deadline only bounds backend initialization. Reusing it
+    // would make every request fail once a healthy daemon has lived past the
+    // startup cap, so each IPC operation gets a fresh request-local budget
+    // matching the client-side IPC cap.
+    let context = CommandContext {
+        deadline: Deadline::after(&SystemClock, crate::daemon::client::DAEMON_IPC_CAP),
+        cancellation: Arc::clone(&startup_context.cancellation),
+        diagnostics: Arc::clone(&startup_context.diagnostics),
+    };
     let (id, operation) = request.into_parts();
     shared.before_request(&operation).await;
     let connection = shared.as_connection();
     match operation {
         IpcOperation::Ping => (safe_success(id, json!("pong")), false),
-        IpcOperation::ListTools => match connection.list_tools(context).await {
+        IpcOperation::ListTools => match connection.list_tools(&context).await {
             Ok(tools) => match serde_json::to_value(tools) {
                 Ok(tools) => (safe_success(id, tools), false),
                 Err(_) => (safe_failure(id, IpcErrorCode::Internal), false),
@@ -1015,7 +1024,7 @@ async fn execute_request(
             Err(_) => (safe_failure(id, IpcErrorCode::ExecutionError), false),
         },
         IpcOperation::CallTool { tool_name, args } => {
-            match connection.call_tool(context, &tool_name, args).await {
+            match connection.call_tool(&context, &tool_name, args).await {
                 Ok(result) => (safe_success(id, result), false),
                 Err(_) => (safe_failure(id, IpcErrorCode::ExecutionError), false),
             }
