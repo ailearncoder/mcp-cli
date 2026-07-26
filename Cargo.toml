@@ -1,0 +1,298 @@
+[package]
+name = "mcp-cli"
+version = "0.3.0"
+edition = "2024"
+publish = false
+
+[features]
+default = []
+test-fixtures = []
+
+[lib]
+name = "mcp_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "mcp-cli"
+path = "src/main.rs"
+
+[[bin]]
+name = "mock-stdio-server"
+path = "src/bin/mock_stdio_server.rs"
+required-features = ["test-fixtures"]
+
+[[test]]
+name = "stdio_transport"
+path = "tests/integration/stdio_transport.rs"
+required-features = ["test-fixtures"]
+
+[[test]]
+name = "http_transport"
+path = "tests/integration/http_transport.rs"
+
+[[test]]
+name = "transport_contract"
+path = "tests/integration/transport_contract.rs"
+required-features = ["test-fixtures"]
+
+[[test]]
+name = "direct_retry"
+path = "tests/integration/direct_retry.rs"
+
+[[test]]
+name = "daemon_linux"
+path = "tests/integration/daemon_linux.rs"
+required-features = ["test-fixtures"]
+
+[[test]]
+name = "daemon_macos"
+path = "tests/integration/daemon_macos.rs"
+required-features = ["test-fixtures"]
+
+[[test]]
+name = "daemon_spawn"
+path = "tests/integration/daemon_spawn.rs"
+required-features = ["test-fixtures"]
+
+[[test]]
+name = "daemon_worker"
+path = "tests/integration/daemon_worker.rs"
+required-features = ["test-fixtures"]
+
+[[test]]
+name = "runtime_retry"
+path = "tests/unit/runtime_retry.rs"
+
+[[test]]
+name = "cli_syntax"
+path = "tests/process/cli_syntax.rs"
+
+[[test]]
+name = "direct_dispatch"
+path = "tests/process/direct_dispatch.rs"
+required-features = ["test-fixtures"]
+
+[[test]]
+name = "direct_cli"
+path = "tests/process/direct_cli.rs"
+required-features = ["test-fixtures"]
+
+[[test]]
+name = "cli_end_to_end"
+path = "tests/process/cli_end_to_end.rs"
+required-features = ["test-fixtures"]
+
+[[test]]
+name = "signals"
+path = "tests/process/signals.rs"
+required-features = ["test-fixtures"]
+
+[[test]]
+name = "windows_direct"
+path = "tests/process/windows_direct.rs"
+required-features = ["test-fixtures"]
+
+[[test]]
+name = "commands"
+path = "tests/unit/commands.rs"
+
+[[test]]
+name = "output"
+path = "tests/unit/output.rs"
+
+[[test]]
+name = "config"
+path = "tests/unit/config.rs"
+
+[[test]]
+name = "reference_compatibility"
+path = "tests/unit/reference_compatibility.rs"
+
+[[test]]
+name = "property_01_target_syntax"
+path = "tests/properties/property_01_target_syntax.rs"
+
+[[test]]
+name = "property_02_invalid_cli"
+path = "tests/properties/property_02_invalid_cli.rs"
+
+[[test]]
+name = "property_03_descriptions"
+path = "tests/properties/property_03_descriptions.rs"
+
+[[test]]
+name = "property_04_canonical_config"
+path = "tests/properties/property_04_canonical_config.rs"
+
+[[test]]
+name = "property_05_env_substitution"
+path = "tests/properties/property_05_env_substitution.rs"
+
+[[test]]
+name = "property_06_missing_env"
+path = "tests/properties/property_06_missing_env.rs"
+
+[[test]]
+name = "property_07_server_validation"
+path = "tests/properties/property_07_server_validation.rs"
+
+[[test]]
+name = "property_08_env_merge"
+path = "tests/properties/property_08_env_merge.rs"
+
+[[test]]
+name = "property_09_tool_filter"
+path = "tests/properties/property_09_tool_filter.rs"
+
+[[test]]
+name = "property_10_filter_authorization"
+path = "tests/properties/property_10_filter_authorization.rs"
+
+[[test]]
+name = "property_11_search_pattern"
+path = "tests/properties/property_11_search_pattern.rs"
+
+[[test]]
+name = "property_12_grep_composition"
+path = "tests/properties/property_12_grep_composition.rs"
+
+[[test]]
+name = "property_13_mode_equivalence"
+path = "tests/properties/property_13_mode_equivalence.rs"
+
+[[test]]
+name = "property_14_ndjson_chunks"
+path = "tests/properties/property_14_ndjson_chunks.rs"
+
+[[test]]
+name = "property_15_ipc_correlation"
+path = "tests/properties/property_15_ipc_correlation.rs"
+required-features = ["test-fixtures"]
+
+[[test]]
+name = "property_16_idle_deadline"
+path = "tests/properties/property_16_idle_deadline.rs"
+required-features = ["test-fixtures"]
+
+[[test]]
+name = "property_17_shutdown_idempotent"
+path = "tests/properties/property_17_shutdown_idempotent.rs"
+required-features = ["test-fixtures"]
+
+[[test]]
+name = "property_18_retry_count"
+path = "tests/properties/property_18_retry_count.rs"
+
+[[test]]
+name = "property_19_backoff_budget"
+path = "tests/properties/property_19_backoff_budget.rs"
+
+[[test]]
+name = "property_20_retry_diagnostics"
+path = "tests/properties/property_20_retry_diagnostics.rs"
+
+[[test]]
+name = "property_21_order_independence"
+path = "tests/properties/property_21_order_independence.rs"
+
+[[test]]
+name = "property_22_partial_failure"
+path = "tests/properties/property_22_partial_failure.rs"
+
+[[test]]
+name = "property_23_schema_roundtrip"
+path = "tests/properties/property_23_schema_roundtrip.rs"
+
+[[test]]
+name = "property_24_call_input_source"
+path = "tests/properties/property_24_call_input_source.rs"
+
+[[test]]
+name = "property_25_call_object"
+path = "tests/properties/property_25_call_object.rs"
+
+[[test]]
+name = "property_26_result_roundtrip"
+path = "tests/properties/property_26_result_roundtrip.rs"
+
+[[test]]
+name = "property_27_diagnostic_isolation"
+path = "tests/properties/property_27_diagnostic_isolation.rs"
+
+[[test]]
+name = "property_28_error_format"
+path = "tests/properties/property_28_error_format.rs"
+
+[[test]]
+name = "property_29_exit_codes"
+path = "tests/properties/property_29_exit_codes.rs"
+
+[[test]]
+name = "property_30_suggestions"
+path = "tests/properties/property_30_suggestions.rs"
+
+[[test]]
+name = "property_31_color_policy"
+path = "tests/properties/property_31_color_policy.rs"
+
+[[test]]
+name = "property_32_bounded_concurrency"
+path = "tests/properties/property_32_bounded_concurrency.rs"
+
+[[test]]
+name = "property_33_invalid_concurrency"
+path = "tests/properties/property_33_invalid_concurrency.rs"
+
+[[test]]
+name = "property_34_resource_cleanup"
+path = "tests/properties/property_34_resource_cleanup.rs"
+
+[[test]]
+name = "property_35_daemon_paths"
+path = "tests/properties/property_35_daemon_paths.rs"
+
+[[test]]
+name = "property_36_secret_redaction"
+path = "tests/properties/property_36_secret_redaction.rs"
+
+[[test]]
+name = "property_37_repeatable_trace"
+path = "tests/properties/property_37_repeatable_trace.rs"
+
+[dependencies]
+rustix = { version = "=1.1.4", features = ["param", "process"] }
+rmcp = { version = "=2.2.0", default-features = false, features = [
+    "client",
+    "transport-child-process",
+    "transport-streamable-http-client-reqwest",
+] }
+tokio = { version = "=1.47.1", features = [
+    "fs",
+    "io-util",
+    "macros",
+    "net",
+    "process",
+    "rt-multi-thread",
+    "signal",
+    "sync",
+    "time",
+] }
+clap = { version = "=4.5.41", features = ["derive"] }
+serde = { version = "=1.0.219", features = ["derive"] }
+serde_json = "=1.0.142"
+thiserror = "=2.0.12"
+sha2 = "=0.10.9"
+url = { version = "=2.5.4", features = ["serde"] }
+reqwest = { version = "=0.12.22", default-features = false, features = [
+    "json",
+    "rustls-tls",
+    "stream",
+] }
+futures = "=0.3.33"
+sse-stream = "=0.2.5"
+
+[dev-dependencies]
+proptest = "=1.7.0"
+assert_cmd = "=2.0.17"
+predicates = "=3.1.3"
+tempfile = "=3.20.0"

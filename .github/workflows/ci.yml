@@ -1,0 +1,298 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+  PROPTEST_CASES: "256"
+  PROPTEST_RNG_SEED: "293847561029384756"
+
+jobs:
+  stable-platforms:
+    name: stable / ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux
+            runner: ubuntu-latest
+            shell: bash
+            unix: true
+            daemon_target: daemon_linux
+          - platform: macos
+            runner: macos-latest
+            shell: bash
+            unix: true
+            daemon_target: daemon_macos
+          - platform: windows
+            runner: windows-latest
+            shell: pwsh
+            unix: false
+            daemon_target: ""
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Create isolated runtime directory (Unix)
+        if: matrix.unix
+        shell: bash
+        run: |
+          runtime_root="${{ runner.temp }}/mcp-cli-${{ matrix.platform }}-${{ github.run_id }}-${{ github.run_attempt }}"
+          mkdir -p "$runtime_root"
+          chmod 700 "$runtime_root"
+          {
+            echo "CI_RUNTIME_ROOT=$runtime_root"
+            echo "TMPDIR=$runtime_root"
+            echo "TMP=$runtime_root"
+            echo "TEMP=$runtime_root"
+            echo "XDG_RUNTIME_DIR=$runtime_root"
+          } >> "$GITHUB_ENV"
+
+      - name: Create isolated runtime directory (Windows)
+        if: ${{ !matrix.unix }}
+        shell: pwsh
+        run: |
+          $runtimeRoot = "${{ runner.temp }}/mcp-cli-${{ matrix.platform }}-${{ github.run_id }}-${{ github.run_attempt }}"
+          New-Item -ItemType Directory -Force -Path $runtimeRoot | Out-Null
+          "CI_RUNTIME_ROOT=$runtimeRoot" | Add-Content -Path $env:GITHUB_ENV
+          "TMPDIR=$runtimeRoot" | Add-Content -Path $env:GITHUB_ENV
+          "TMP=$runtimeRoot" | Add-Content -Path $env:GITHUB_ENV
+          "TEMP=$runtimeRoot" | Add-Content -Path $env:GITHUB_ENV
+          "XDG_RUNTIME_DIR=$runtimeRoot" | Add-Content -Path $env:GITHUB_ENV
+
+      - name: Install Rust stable
+        shell: ${{ matrix.shell }}
+        run: rustup toolchain install stable --profile minimal --component rustfmt
+
+      - name: Select Rust stable
+        shell: ${{ matrix.shell }}
+        run: rustup default stable
+
+      - name: Cache Cargo data
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-stable-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-stable-
+
+      - name: Verify stable toolchain
+        shell: ${{ matrix.shell }}
+        run: rustc --version --verbose
+
+      - name: Check formatting
+        shell: ${{ matrix.shell }}
+        run: cargo fmt --check
+
+      - name: Check all targets and features
+        shell: ${{ matrix.shell }}
+        run: cargo check --locked --all-targets --all-features
+
+      # This step is intentionally unconditional in the matrix. Platform-only
+      # conditionals below cannot silently replace or skip direct-mode coverage.
+      - name: Run direct-mode tests
+        shell: ${{ matrix.shell }}
+        env:
+          MCP_NO_DAEMON: "1"
+        run: >-
+          cargo test --locked --all-features
+          --test stdio_transport
+          --test http_transport
+          --test transport_contract
+          --test direct_retry
+          --test cli_syntax
+          --test direct_dispatch
+          --test direct_cli
+          --test cli_end_to_end
+          -- --test-threads=1
+
+      - name: Run portable unit and property tests
+        shell: ${{ matrix.shell }}
+        env:
+          MCP_NO_DAEMON: "1"
+        run: >-
+          cargo test --locked --all-features --lib
+          --test support_self_test
+          --test runtime_retry
+          --test commands
+          --test output
+          --test config
+          --test reference_compatibility
+          --test property_01_target_syntax
+          --test property_02_invalid_cli
+          --test property_03_descriptions
+          --test property_04_canonical_config
+          --test property_05_env_substitution
+          --test property_06_missing_env
+          --test property_07_server_validation
+          --test property_08_env_merge
+          --test property_09_tool_filter
+          --test property_10_filter_authorization
+          --test property_11_search_pattern
+          --test property_12_grep_composition
+          --test property_13_mode_equivalence
+          --test property_18_retry_count
+          --test property_19_backoff_budget
+          --test property_20_retry_diagnostics
+          --test property_21_order_independence
+          --test property_22_partial_failure
+          --test property_23_schema_roundtrip
+          --test property_24_call_input_source
+          --test property_25_call_object
+          --test property_26_result_roundtrip
+          --test property_27_diagnostic_isolation
+          --test property_28_error_format
+          --test property_29_exit_codes
+          --test property_30_suggestions
+          --test property_31_color_policy
+          --test property_32_bounded_concurrency
+          --test property_33_invalid_concurrency
+          --test property_34_resource_cleanup
+          --test property_37_repeatable_trace
+          -- --test-threads=1
+
+      - name: Run Unix property tests
+        if: matrix.unix
+        shell: bash
+        run: >-
+          cargo test --locked --all-features
+          --test property_14_ndjson_chunks
+          --test property_15_ipc_correlation
+          --test property_16_idle_deadline
+          --test property_17_shutdown_idempotent
+          --test property_35_daemon_paths
+          --test property_36_secret_redaction
+          -- --test-threads=1
+
+      - name: Run real daemon and Unix signal suites
+        if: matrix.unix
+        shell: bash
+        run: >-
+          cargo test --locked --all-features
+          --test daemon_spawn
+          --test daemon_worker
+          --test ${{ matrix.daemon_target }}
+          --test signals
+          -- --test-threads=1
+
+      - name: Run Windows direct-only suite
+        if: ${{ !matrix.unix }}
+        shell: pwsh
+        env:
+          MCP_NO_DAEMON: "0"
+        run: cargo test --locked --all-features --test windows_direct -- --test-threads=1
+
+      - name: Record proptest replay information
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const runUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const lines = [
+              `commit=${context.sha}`,
+              `run=${runUrl}`,
+              `runner=${process.env.RUNNER_OS}`,
+              `platform=${{ toJSON(matrix.platform) }}`,
+              `proptest_seed=${process.env.PROPTEST_RNG_SEED}`,
+              `proptest_cases=${process.env.PROPTEST_CASES}`,
+              'replay=cargo test --locked --all-features --test <failing-target> -- --test-threads=1',
+              'Set PROPTEST_RNG_SEED and PROPTEST_CASES to the values above when replaying.',
+            ];
+            fs.writeFileSync('ci-proptest-replay.txt', `${lines.join('\n')}\n`);
+
+      - name: Upload proptest regressions and replay data
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: proptest-failure-${{ matrix.platform }}-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            ci-proptest-replay.txt
+            **/*.proptest-regressions
+            **/proptest-regressions/**
+
+  release-quality:
+    name: release quality / ${{ matrix.platform }}
+    needs: stable-platforms
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux
+            runner: ubuntu-latest
+            shell: bash
+            executable: mcp-cli
+          - platform: macos
+            runner: macos-latest
+            shell: bash
+            executable: mcp-cli
+          - platform: windows
+            runner: windows-latest
+            shell: pwsh
+            executable: mcp-cli.exe
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable release components
+        shell: ${{ matrix.shell }}
+        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+
+      - name: Select Rust stable
+        shell: ${{ matrix.shell }}
+        run: rustup default stable
+
+      - name: Cache Cargo data
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-release-
+            ${{ runner.os }}-cargo-stable-
+
+      - name: Check formatting
+        shell: ${{ matrix.shell }}
+        run: cargo fmt --check
+
+      - name: Lint all targets and features
+        shell: ${{ matrix.shell }}
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Test all features
+        shell: ${{ matrix.shell }}
+        run: cargo test --all-features
+
+      - name: Build release executable
+        shell: ${{ matrix.shell }}
+        run: cargo build --release --all-features
+
+      - name: Upload public release executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcp-cli-${{ matrix.platform }}
+          if-no-files-found: error
+          path: target/release/${{ matrix.executable }}
