@@ -347,7 +347,7 @@ mod tests {
             let cwd = root.path().join("cwd");
             let home = root.path().join("home");
             fs::create_dir_all(&cwd).expect("create cwd");
-            fs::create_dir_all(home.join(".config/mcp")).expect("create home config");
+            fs::create_dir_all(home.join(".config").join("mcp")).expect("create home config");
             Self { root, cwd, home }
         }
 
@@ -368,7 +368,7 @@ mod tests {
         }
 
         fn xdg_path(&self) -> PathBuf {
-            self.home.join(".config/mcp").join(CONFIG_FILE_NAME)
+            self.home.join(".config").join("mcp").join(CONFIG_FILE_NAME)
         }
     }
 

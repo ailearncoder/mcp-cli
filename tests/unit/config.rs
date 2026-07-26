@@ -85,7 +85,7 @@ impl Fixture {
         let cwd = root.path().join("cwd");
         let home = root.path().join("home");
         fs::create_dir_all(&cwd).expect("create isolated cwd");
-        fs::create_dir_all(home.join(".config/mcp")).expect("create isolated config home");
+        fs::create_dir_all(home.join(".config").join("mcp")).expect("create isolated config home");
         Self {
             _root: root,
             cwd,
@@ -102,7 +102,7 @@ impl Fixture {
     }
 
     fn xdg_config(&self) -> PathBuf {
-        self.home.join(".config/mcp").join(CONFIG_FILE)
+        self.home.join(".config").join("mcp").join(CONFIG_FILE)
     }
 
     fn path(&self, name: &str) -> PathBuf {
