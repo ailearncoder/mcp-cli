@@ -610,7 +610,12 @@ mod tests {
         assert!(paths.remove_lock().unwrap());
         assert!(!paths.remove_lock().unwrap());
 
-        let listener = UnixListener::bind(&paths.socket).unwrap();
+        // Bind the socket in a guaranteed-short path to stay within SUN_LEN
+        // even when TMPDIR is long (e.g. CI runners).
+        let sock_dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+        let short_socket = sock_dir.path().join("s");
+        let listener = UnixListener::bind(&short_socket).unwrap();
+        fs::rename(&short_socket, &paths.socket).unwrap();
         assert!(paths.remove_socket().unwrap());
         drop(listener);
 

@@ -738,6 +738,7 @@ fn validate_absolute_normalized_path(path: &Path) -> Result<(), ProcessIdentityE
 }
 
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 mod macos_process {
     use std::{ffi::c_void, mem::MaybeUninit, os::raw::c_int};
 

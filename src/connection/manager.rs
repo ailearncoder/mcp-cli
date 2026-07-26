@@ -17,9 +17,11 @@ use crate::{
     policy::retry::ErrorClass,
 };
 
+#[cfg(unix)]
+use super::ConnectionError;
 use super::{
-    ConnectionError, ConnectionManager, ConnectionResourceRegistry, DirectConnectionManager,
-    DirectConnector, McpConnection,
+    ConnectionManager, ConnectionResourceRegistry, DirectConnectionManager, DirectConnector,
+    McpConnection,
 };
 
 /// The production connection selector shared by list, info, grep, and call.
@@ -1074,7 +1076,14 @@ mod tests {
         let root = tempfile::tempdir().expect("runtime root");
         let paths = DaemonPaths::from_runtime_parent(root.path(), &server_id("dead-worker"))
             .expect("paths");
-        let listener = UnixListener::bind(&paths.socket).expect("socket");
+        // Bind the socket in a guaranteed-short path to stay within SUN_LEN
+        // even when TMPDIR is long (e.g. CI runners).
+        let sock_dir = tempfile::Builder::new()
+            .tempdir_in("/tmp")
+            .expect("short socket dir");
+        let short_socket = sock_dir.path().join("s");
+        let listener = UnixListener::bind(&short_socket).expect("socket");
+        fs::rename(&short_socket, &paths.socket).expect("move socket");
         fs::set_permissions(&paths.socket, fs::Permissions::from_mode(0o600))
             .expect("socket permissions");
         fs::write(&paths.lock, b"owned lock").expect("lock");

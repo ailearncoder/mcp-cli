@@ -206,7 +206,7 @@ fn all_public_commands_use_direct_stdio_and_keep_cross_platform_output_contract(
         let output = fixture.run(args, *stdin);
         assert_success(&output);
         assert_eq!(
-            String::from_utf8(output.stdout).unwrap(),
+            String::from_utf8(output.stdout.clone()).unwrap(),
             *expected_stdout,
             "args={args:?}"
         );
@@ -220,7 +220,7 @@ fn all_public_commands_use_direct_stdio_and_keep_cross_platform_output_contract(
     let fixture = successful_fixture();
     let output = fixture.run(&["info", "fixture"], None);
     assert_success(&output);
-    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stdout = String::from_utf8(output.stdout.clone()).unwrap();
     assert!(
         stdout.starts_with("Server: fixture\nTransport: stdio\n"),
         "{stdout}"

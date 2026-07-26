@@ -2943,8 +2943,15 @@ mod tests {
             &server_id("shutdown-artifacts"),
         )
         .expect("daemon paths");
+        // Bind the socket in a guaranteed-short path to stay within SUN_LEN
+        // even when TMPDIR is long (e.g. CI runners).
+        let sock_dir = tempfile::Builder::new()
+            .tempdir_in("/tmp")
+            .expect("short socket dir");
+        let short_socket = sock_dir.path().join("s");
         let socket_listener =
-            std::os::unix::net::UnixListener::bind(&paths.socket).expect("artifact socket");
+            std::os::unix::net::UnixListener::bind(&short_socket).expect("artifact socket");
+        fs::rename(&short_socket, &paths.socket).expect("move artifact socket");
         fs::set_permissions(&paths.socket, fs::Permissions::from_mode(0o600))
             .expect("artifact socket permissions");
         for path in [&paths.pid, &paths.lock] {
